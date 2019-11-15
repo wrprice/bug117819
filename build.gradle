@@ -1,0 +1,170 @@
+buildscript {
+    repositories {
+        maven {
+            url artifactoryUrl
+            credentials {
+                username = artifactoryUser
+                password = artifactoryPassword
+            }
+        }
+    }
+    dependencies {
+        classpath "com.github.jengelman.gradle.plugins:shadow:${shadowVersion}"
+    }
+}
+
+apply plugin: 'java'
+apply plugin: 'maven-publish'
+apply plugin: 'com.github.johnrengelman.shadow'
+
+
+def isRelease = project.hasProperty('isRelease') ? isRelease.toBoolean() : false
+if (!isRelease) {
+    version += '-SNAPSHOT'
+}
+
+    configurations {
+        provided
+       
+        all {
+            resolutionStrategy {
+                // handle CVE by forcing transitive dependency to safe version
+                force "commons-beanutils:commons-beanutils:${commonsBeanutilsVersion}"
+
+                // bump up Netty to avoid CVE-2019-16869
+                force "io.netty:netty-handler:${nettyVersion}"
+                force "io.netty:netty-codec:${nettyVersion}"
+                force "io.netty:netty-transport:${nettyVersion}"
+                force "io.netty:netty-buffer:${nettyVersion}"
+                force "io.netty:netty-common:${nettyVersion}"
+
+                force "org.codehaus.plexus:plexus-utils:3.0.24"
+            }
+        }
+    }
+    sourceSets.main.compileClasspath += configurations.provided
+    sourceSets.test.compileClasspath += configurations.provided
+
+    repositories {
+        maven {
+            url artifactoryUrl
+            credentials {
+                username = artifactoryUser
+                password = artifactoryPassword
+            }
+        }
+    }
+
+    dependencies {
+
+        // supports the @SuppressFBWarnings annotation
+        provided "com.github.spotbugs:spotbugs-annotations:${spotbugsVersion}"
+
+        compileOnly "org.projectlombok:lombok:${lombokVersion}"
+        annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+
+        compile "org.slf4j:slf4j-api:${slf4jVersion}"
+        compile "com.sun.xml.bind:jaxb-impl:${jaxbVersion}"
+        compile 'org.mindrot:jbcrypt:0.3m'
+        compile 'com.googlecode.json-simple:json-simple:1.1'
+        compile ("org.jolokia:jolokia-core:${jolokiaVersion}") {
+          exclude group: 'com.googlecode.json-simple'
+        }
+        compile "io.dropwizard:dropwizard-assets:${dropwizardVersion}"
+        compile "io.dropwizard:dropwizard-auth:${dropwizardVersion}"
+        compile "io.dropwizard:dropwizard-core:${dropwizardVersion}"
+        compile "io.dropwizard.metrics:metrics-core:${metricsVersion}"
+        compile "io.dropwizard.metrics:metrics-healthchecks:${metricsVersion}"
+        compile "io.dropwizard.metrics:metrics-jmx:${metricsVersion}"
+        compile "io.prometheus:simpleclient:${prometheusClientVersion}"
+        compile "io.prometheus:simpleclient_dropwizard:${prometheusClientVersion}"
+        compile "io.prometheus:simpleclient_servlet:${prometheusClientVersion}"
+        compile "javax.activation:activation:${javaxActivationVersion}"
+        compile "com.fasterxml.jackson.core:jackson-annotations:${jacksonVersion}"
+        compile "com.fasterxml.jackson.core:jackson-databind:${jacksonDatabindVersion}"
+        compile "com.datastax.cassandra:cassandra-driver-core:${cassandraDriverVersion}"
+        compile "com.google.guava:guava:${guavaVersion}"
+        compile "org.apache.lucene:lucene-core:${luceneVersion}"
+        compile "org.apache.lucene:lucene-analyzers-common:${luceneVersion}"
+        compile "org.apache.lucene:lucene-queryparser:${luceneVersion}"
+        compile "org.hibernate:hibernate-validator:${hibernateValidatorVersion}"
+        compile 'javax.validation:validation-api:${validationApiVersion}'
+        compile "org.owasp.esapi:esapi:${owaspEsapiVersion}"
+
+        runtime ("net.jpountz.lz4:lz4:${lz4Version}")
+        runtime "net.java.dev.jna:jna:4.1.0"
+
+        testCompileOnly configurations.compileOnly
+        testAnnotationProcessor configurations.annotationProcessor
+    }
+
+    javadoc {
+        classpath += configurations.provided
+    }
+    build.dependsOn javadoc
+
+    task javadocJar(type: Jar, dependsOn: ['javadoc']) {
+        from javadoc.destinationDir
+        classifier = 'javadoc'
+    }
+
+    task sourcesJar(type: Jar) {
+        classifier = 'sources'
+        from sourceSets.main.allSource
+    }
+
+shadowJar {
+    // Copying all classes into one large JAR with a single manifest causes Lucene to
+    // report an incorrect version (it's looking for information from it's own manifest).
+    def luceneAttrs = [
+        // would prefer to pull info directly from Lucene's JAR, but can settle for this
+        'Specification-Title': 'Lucene Search Engine: core',
+        'Specification-Version': luceneVersion.replaceAll('[^0-9.]', ''), // requires dot-separated digits ONLY
+        'Specification-Vendor': 'The Apache Software Foundation',
+        'Implementation-Title': 'org.apache.lucene',
+        'Implementation-Version': luceneVersion, // what Lucene reports; can accept any string
+        'Implementation-Vendor': 'The Apache Software Foundation'
+    ]
+
+    classifier "standalone"
+    mergeServiceFiles()
+    manifest {
+        attributes luceneAttrs, "org/apache/lucene/"
+    }
+}
+
+    publishing {
+        publications {
+            applicationJars(MavenPublication) {
+                from components.java
+                artifact javadocJar
+                artifact sourcesJar
+            }
+            shadow(MavenPublication) { publication ->
+                project.shadow.component(publication)
+            }
+        }
+        repositories {
+            maven {
+                url artifactoryUrl
+                credentials {
+                    username = artifactoryUser
+                    password = artifactoryPassword
+                }
+            }
+        }
+    }
+
+    afterEvaluate {
+        tasks.withType(JavaCompile) {
+            it.options.compilerArgs << '-Xlint:all' << '-Xlint:-processing'
+            if (JavaVersion.current() >= JavaVersion.VERSION_1_9) {
+                // --release flag supported
+                it.options.compilerArgs << '--release' << javaPlatform
+            } else {
+                // --release flag not supported
+                sourceCompatibility = javaPlatform
+                targetCompatibility = javaPlatform
+            }
+        }
+    }
